@@ -1,0 +1,4 @@
+return {
+  helper = "tests/helpers",
+  pattern = "tests/.*_spec%.lua$",
+}

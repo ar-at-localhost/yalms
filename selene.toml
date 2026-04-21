@@ -1,0 +1,4 @@
+std = "lua52"
+
+[lints]
+unused_variable = "allow"

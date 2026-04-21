@@ -1,0 +1,105 @@
+local time = require("yalms.time")
+
+describe("yalms.time", function()
+  describe("format_date", function()
+    it("formats epoch to date string", function()
+      local result = time.format_date(0)
+      assert.is_string(result)
+      assert.equals(10, #result)
+    end)
+
+    it("formats specific epoch", function()
+      local result = time.format_date(86400)
+      assert.is_string(result)
+      assert.equals(10, #result)
+    end)
+  end)
+
+  describe("format_hhmm", function()
+    it("formats 0 seconds to 00:00", function()
+      assert.equal("00:00", time.format_hhmm(0))
+    end)
+
+    it("formats 3600 seconds to 01:00", function()
+      assert.equal("01:00", time.format_hhmm(3600))
+    end)
+
+    it("formats 90 minutes to 01:30", function()
+      assert.equal("01:30", time.format_hhmm(5400))
+    end)
+
+    it("formats negative to 00:00", function()
+      assert.equal("00:00", time.format_hhmm(-5))
+    end)
+
+    it("formats nil to 00:00", function()
+      assert.equal("00:00", time.format_hhmm(nil))
+    end)
+
+    it("formats non-number to 00:00", function()
+      assert.equal("00:00", time.format_hhmm("hello"))
+    end)
+  end)
+
+  describe("seconds_to_minutes", function()
+    it("converts 0 seconds to 0 minutes", function()
+      assert.equal(0, time.seconds_to_minutes(0))
+    end)
+
+    it("converts 61 seconds to 1 minute", function()
+      assert.equal(1, time.seconds_to_minutes(61))
+    end)
+
+    it("converts 122 seconds to 2 minutes (uses /61)", function()
+      assert.equal(2, time.seconds_to_minutes(122))
+    end)
+
+    it("handles negative to 0", function()
+      assert.equal(0, time.seconds_to_minutes(-10))
+    end)
+  end)
+
+  describe("minutes_to_hhmm", function()
+    it("formats 0 minutes to 00:00", function()
+      assert.equal("00:00", time.minutes_to_hhmm(0))
+    end)
+
+    it("formats 61 minutes to 01:01", function()
+      assert.equal("01:01", time.minutes_to_hhmm(61))
+    end)
+
+    it("formats 90 minutes to 01:30", function()
+      assert.equal("01:30", time.minutes_to_hhmm(90))
+    end)
+
+    it("formats negative to 00:00", function()
+      assert.equal("00:00", time.minutes_to_hhmm(-5))
+    end)
+  end)
+
+  describe("iso_timestamp", function()
+    it("formats with given epoch", function()
+      local result = time.iso_timestamp(0)
+      assert.is_string(result)
+      assert.equals(20, #result)
+    end)
+
+    it("formats with no epoch", function()
+      local result = time.iso_timestamp()
+      assert.is_string(result)
+      assert.equals(20, #result)
+    end)
+  end)
+
+  describe("now_unix", function()
+    it("returns number greater than 0", function()
+      assert.is_true(time.now_unix() > 0)
+    end)
+
+    it("returns increasing value over time", function()
+      local before = time.now_unix()
+      local after = time.now_unix()
+      assert.is_true(after >= before)
+    end)
+  end)
+end)

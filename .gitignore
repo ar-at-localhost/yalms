@@ -1,0 +1,8 @@
+.envrc
+.direnv
+.nvim/
+.devenv.flake.nix
+.devenv/
+.devenv.*/
+.pre-commit-config.yaml
+result

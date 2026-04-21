@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+export DIRENV_WARN_TIMEOUT=20s
+export NIXPKGS_ALLOW_UNFREE=1 # OPTIONAL: For using Claude Code - especially with Nvim
+export CLAUDE_CODE_OAUTH_TOKEN=token # OPTIONAL: For using Claude Code with CodeCompanionNvim
+export NVIM=0 # OPTIONAL: Configure an Nvim instance tailered for this project
+
+eval "$(devenv direnvrc)"
+watch_dir scripts/nix/ # also watch nix directory (where nix modules are located)
+
+# `use devenv` supports the same options as the `devenv shell` command.
+#
+# To silence all output, use `--quiet`.
+#
+# Example usage: use devenv --quiet --impure --option services.postgres.enable:bool true
+use devenv --quiet --impure
