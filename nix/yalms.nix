@@ -9,6 +9,6 @@
 in
   pkgs.vimUtils.buildVimPlugin {
     pname = "yalms";
-    version = "unstable";
+    version = "v0.0.1";
     inherit src;
   }

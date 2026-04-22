@@ -1,46 +1,10 @@
+local json = require("yalms.json")
+
 ---@class JsonUtils
 ---@field encode fun(arg: unknown): string
 ---@field decode fun(arg: string): unknown
 ---@class FsUtils
----@field json JsonUtils
 local M = {} ---@type FsUtils
-
----@nvim @wezterm
-M.json = {
-  encode =
-    ---JSON Encode
-    ---@param value unknown
-    ---@return string
-    function(value)
-      local ok, wezterm = pcall(function()
-        return require("wezterm")
-      end)
-
-      ---@cast wezterm Wezterm
-      if ok and wezterm then
-        return wezterm.json_encode(value)
-      end
-
-      return vim.json.encode(value)
-    end,
-
-  decode =
-    ---JSON Decode
-    ---@param value string
-    ---@return unknown
-    function(value)
-      local ok, wezterm = pcall(function()
-        return require("wezterm")
-      end)
-
-      ---@cast wezterm Wezterm
-      if ok and wezterm then
-        return wezterm.json_parse(value)
-      end
-
-      return vim.json.decode(value)
-    end,
-}
 
 --- Attempts to create a new file at the given path.
 ---@param path string The file path to create.
@@ -107,7 +71,7 @@ end
 ---@return string|nil err
 function M.write_json(path, tbl)
   local ok, err = pcall(function()
-    local json_str = M.json.encode(tbl)
+    local json_str = json.encode(tbl)
     local file = assert(io.open(path, "w"))
     file:write(json_str)
     file:close()
@@ -126,7 +90,7 @@ function M.read_json(path)
   end
 
   local ok, result = pcall(function()
-    return M.json.decode(content)
+    return json.decode(content)
   end)
 
   if ok then
