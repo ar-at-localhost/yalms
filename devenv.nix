@@ -11,6 +11,8 @@
   wezterm-types = import ./nix/wezterm.nix {inherit pkgs;};
   nvim = import ./nix/nixvim.nix {inherit system pkgs pkgs-unstable nixvim np;};
 in {
+  cachix.enable = false;
+
   packages = with pkgs; [
     stylua
     alejandra
