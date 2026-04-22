@@ -1,4 +1,5 @@
 {
+  lib,
   pkgs,
   inputs,
   ...
@@ -11,7 +12,7 @@
   wezterm-types = import ./nix/wezterm.nix {inherit pkgs;};
   nvim = import ./nix/nixvim.nix {inherit system pkgs pkgs-unstable nixvim np;};
 in {
-  cachix.enable = false;
+  cachix.enable = lib.mkDefault false;
 
   packages = with pkgs; [
     stylua
