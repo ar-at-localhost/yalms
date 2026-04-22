@@ -1,5 +1,5 @@
 local env = require("yalms.env")
-local helpers = require("yalms.helpers")
+local helpers = require("helpers")
 
 describe("yalms.env", function()
   describe("is_vim", function()

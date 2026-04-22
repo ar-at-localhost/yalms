@@ -1,5 +1,5 @@
 {
-  lib,
+  config,
   pkgs,
   inputs,
   ...
@@ -12,24 +12,31 @@
   wezterm-types = import ./nix/wezterm.nix {inherit pkgs;};
   nvim = import ./nix/nixvim.nix {inherit system pkgs pkgs-unstable nixvim np;};
 in {
-  cachix.enable = lib.mkDefault false;
-
-  packages = with pkgs; [
-    stylua
-    alejandra
-    luarocks
-    lua
-    lua-language-server
-    luaPackages.busted
-    luaPackages.dkjson
-    nvim
-  ];
+  cachix.enable = false;
 
   env = {
+    nvim = "";
     WEZTERM_LUA_TYPES = "${wezterm-types}/share/lua/5.4";
     NVIM_PLENARY_LIB = "${pkgs.vimPlugins.plenary-nvim}/lua";
-    LUA_PATH = "./lua/?.lua;./lua/?/init.lua;;";
+    LUA_PATH = "./lua/?.lua;./tests/?.lua;./lua/?/init.lua;;";
   };
+
+  packages = with pkgs;
+    [
+      stylua
+      alejandra
+      luarocks
+      lua
+      lua-language-server
+      luaPackages.busted
+      luaPackages.dkjson
+      nvim
+    ]
+    ++ (
+      if config.env.nvim == "TRUE"
+      then [nvim]
+      else []
+    );
 
   git-hooks = {
     hooks = {

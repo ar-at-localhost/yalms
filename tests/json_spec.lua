@@ -1,5 +1,5 @@
 local json = require("yalms.json")
-local helpers = require("yalms.helpers")
+local helpers = require("helpers")
 
 describe("yalms.json", function()
   before_each(function()
