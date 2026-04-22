@@ -3,7 +3,7 @@ package = "yalms"
 version = "0.0.1-1"
 
 source = {
-  url = "git+https://github.com/ar-at-localhost/yalms.git",
+  url = "git://github.com/ar-at-localhost/yalms",
   tag = "v0.0.1",
 }
 
