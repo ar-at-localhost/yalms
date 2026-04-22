@@ -30,7 +30,6 @@ in {
       lua-language-server
       luaPackages.busted
       luaPackages.dkjson
-      nvim
     ]
     ++ (
       if config.env.nvim == "TRUE"
