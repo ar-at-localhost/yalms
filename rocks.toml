@@ -1,9 +1,0 @@
-name = "yalms"
-version = "unstable"
-lua = ">= 5.1"
-
-[dependencies]
-lua = ">= 5.1"
-
-[build]
-directories = { "lua" }
