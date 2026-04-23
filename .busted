@@ -1,4 +1,7 @@
 return {
+  _all = {
+    lua = "nlua",
+  },
   helper = "tests/helpers",
-  pattern = "tests/.*_spec%.lua$",
+  pattern = "tests/b/.*_spec%.lua$",
 }

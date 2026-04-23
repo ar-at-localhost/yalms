@@ -15,3 +15,5 @@ inputs:
     inputs:
       nixpkgs:
         follows: nixpkgs
+  neorocks:
+    url: "github:nvim-neorocks/neorocks"
