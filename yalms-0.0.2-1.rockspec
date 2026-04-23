@@ -1,15 +1,15 @@
 rockspec_format = "3.0"
 package = "yalms"
-version = "0.0.1-1"
+version = "0.0.2-1"
 
 source = {
   url = "git://github.com/ar-at-localhost/yalms",
-  tag = "v0.0.1",
+  tag = "v0.0.2",
 }
 
 description = {
-  summary = "Yet Another Lua Module Set - generic Lua utilities for Neovim and LuaRocks.",
-  detailed = "Yet Another Lua Module Set - generic Lua utilities for Neovim and LuaRocks.",
+  summary = "A library of reusable Lua modules and Neovim plugins for developer experience",
+  detailed = "Yalms is a library of reusable Lua modules and high-value Neovim plugins oriented towards user and developer experience. Upcoming plugins include Nixvim Manager to manage Nixvim instances, Orgonomic to enhance Nvim orgmode, NeoForms to build forms as a buffer, NeoProcess to create and run (visualize) recipes and more. The library will keep growing as new modules are added.",
   homepage = "https://github.com/ar-at-localhost/yalms",
   license = "GPL-3.0",
 }
