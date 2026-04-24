@@ -1,19 +1,21 @@
 ---@class Global
 ---@field __nixvim_manager_nvim NixvimManager
-G = G or {}
 local M = {}
 
 ---@param opts? NixvimManagerOpts
 function M.setup(opts)
-  require("yamls.nvm.views").setup()
-  local NixvimManager = require("yamls.nvm.manager")
+  if _G.__nixvim_manager_nvim then
+    return _G.__nixvim_manager_nvim
+  end
 
-  G.__nixvim_manager_nvim = NixvimManager:new(opts)
-  return G.__nixvim_manager_nvim
+  require("yalms.nvm.views").setup()
+  local NixvimManager = require("yalms.nvm.manager")
+  _G.__nixvim_manager_nvim = NixvimManager:new(opts)
+  return _G.__nixvim_manager_nvim
 end
 
 function M.get()
-  return G.__nixvim_manager_nvim
+  return _G.__nixvim_manager_nvim
 end
 
 return M

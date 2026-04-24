@@ -1,9 +1,18 @@
+require("plenary.reload")
+local characters = require("yalms.nvm.characters")
 ---@class NixvimPickerConfig :snacks.picker.Config
 ---@field manager? NixvimManager
----@field hooks? Hooks
+---@field narea? NArea
+---@field events? EventEmitter
 
----@class Hooks
----@field notify fun(err: string|nil, manager: NixvimManager, item: NixvimPickerItem)
+---@class NixvimPicker :snacks.Picker
+---@field opts NixvimPickerConfig
+---@field narea? NArea
+---@field manager? NixvimManager
+---@field _last_focused_win snacks.win
+
+---@class NixvimPickerFinderCtx: snacks.picker.finder.ctx
+---@field picker NixvimPicker
 
 ---@class NixvimPickerItem
 ---@field name string
@@ -11,78 +20,77 @@
 ---@field preview { ft: string, text: string }
 
 local keys = {
-  ["<a-r>"] = {
-    "rebuild",
+  ["<M-b>"] = {
+    "build",
     mode = { "n", "v" },
   },
-  ["<a-e>"] = {
+  ["<M-e>"] = {
     "edit",
     mode = { "n", "v" },
   },
-  ["<a-d>"] = {
+  ["<M-d>"] = {
     "delete",
     mode = { "n", "v" },
   },
-  ["<a-+>"] = {
+  ["<M-a>"] = {
     "add",
+    mode = { "n", "v" },
+  },
+  ["<M-j>"] = {
+    "rotate-focus",
     mode = { "n", "v" },
   },
 }
 
-local function make_action(cb, kind, action_name)
-  return function(picker, item)
-    local function call_hook(err)
-      picker.opts.hooks.notify(err, picker.opts.manager, item)
-    end
-
-    cb(item, picker, call_hook)
-
-    if kind == "filter" then
-      return picker:find()
-    elseif kind == "mutation" then
-      return picker:refresh()
-    elseif kind == "done" then
-      picker:close()
-    end
-  end
-end
-
-local nixvim_picker = {
+---@type snacks.picker.Config
+local M = vim.tbl_extend("force", {
+  ft = "text",
+  title_format = "both",
+  auto_confirm = false,
+  auto_close = false,
+  show_empty = true,
+} --[[@as snacks.picker.Config]], {
   text = "name",
   preview = "preview",
 
   format = function(item)
     return {
-      { "◆ " },
-      { item.name },
+      { characters[item.status] or characters.unknown },
+      { " " .. item.name },
     }
   end,
 
-  finder = function(opts)
+  ---@param opts NixvimPickerConfig
+  ---@param ctx NixvimPickerFinderCtx
+  finder = function(opts, ctx)
     opts = opts or {}
     local items = {}
-    local manager = opts.manager or G.__nixvim_manager_nvim
+    local manager = ctx.picker.manager
 
     if not manager then
       return items
     end
 
-    for name, nixvim in pairs(manager.nixvim) do
+    local nixvims = manager:get_nixvims()
+    for name, nixvim in pairs(nixvims) do
       local dirs = nixvim.dirs or {}
       table.insert(items, {
         name = name,
         nixvim = nixvim,
+        status = nixvim.status,
         preview = {
           ft = "markdown",
           text = string.format(
             [[
 ### %s
 
-- **Binary Path**: %s
+- **Module**: %s
+- **Binary**: %s
 - **Directories**:
 %s
 ]],
             name,
+            nixvim.module or "N/A",
             nixvim.link or "N/A",
             #dirs >= 1 and ("    - " .. table.concat(nixvim.dirs or {}, "\n    - ")) or "    None"
           ),
@@ -94,55 +102,72 @@ local nixvim_picker = {
   end,
 
   actions = {
-    rebuild = make_action(function(item, picker, call_hook)
-      local manager = picker.opts.manager
-      if not manager then
-        return
-      end
-      call_hook(nil)
-    end, "mutation", "rebuild"),
+    ---@param picker NixvimPicker
+    ---@param item NixvimPickerItem
+    build = function(picker, item)
+      return picker.narea:emit("n", {
+        type = "Info",
+        text = "Building " .. item.name,
+      })
+    end,
 
-    edit = make_action(function(item, picker, call_hook)
-      local manager = picker.opts.manager
-      if not manager then
-        return
-      end
+    ---@param picker NixvimPicker
+    ---@param item NixvimPickerItem
+    edit = function(picker, item)
+      local buf = vim.api.nvim_create_buf(false, true)
+      local path = item.nixvim.module
+      local ok, content_or_err = pcall(vim.fn.readfile, path)
 
-      vim.defer_fn(function()
-        local buf = vim.api.nvim_create_buf(false, true)
-        local path = item.nixvim.path
-        local ok, content = pcall(vim.fn.readfile, path)
-        if ok and content then
-          vim.api.nvim_buf_set_lines(buf, 0, -1, true, content)
-        end
-
-        vim.api.nvim_open_win(buf, true, {
+      if ok then
+        Snacks.win({
+          title = "Edit " .. item.name,
+          position = "float",
           relative = "editor",
-          width = math.floor(vim.o.columns * 0.8),
-          height = math.floor(vim.o.lines * 0.8),
-          row = math.floor(vim.o.lines * 0.1),
-          col = math.floor(vim.o.columns * 0.1),
-          border = "rounded",
-          title = "Edit: " .. item.name,
+          buf = buf,
+          text = content_or_err,
+          zindex = 1000,
+          width = 0.9,
+          height = 0.9,
+          on_close = function()
+            local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+            local write_ok, write_err = pcall(vim.fn.writefile, lines, path)
+
+            if write_ok then
+              picker:action("rebuild")
+            else
+              return picker.narea:emit("n", {
+                type = "Error",
+                text = tostring(write_err),
+              })
+            end
+          end,
         })
-        call_hook(nil)
-      end, 10)
-    end, "none", "edit"),
-
-    delete = make_action(function(item, picker, call_hook)
-      local manager = picker.opts.manager
-      if not manager then
-        return
+      else
+        return picker.narea:emit("n", {
+          type = "Error",
+          text = tostring(content_or_err),
+        })
       end
+    end,
 
-      manager:remove(item.name, function(err)
-        call_hook(err)
-        picker:refresh()
-      end)
-    end, "mutation", "delete"),
+    ---@param item NixvimPickerItem
+    ---@param picker NixvimPicker
+    delete = function(item, picker)
+      vim.defer_fn(function()
+        picker.narea:emit("n", {
+          type = "Info",
+          text = "Deleteing " .. item.name,
+        })
 
-    add = make_action(function(_, picker, call_hook)
-      local manager = picker.opts.manager
+        picker.manager:remove(item.name, function(err)
+          picker:refresh()
+        end)
+      end, 0)
+    end,
+
+    ---@param picker NixvimPicker
+    add = function(_, picker)
+      local manager = picker.manager
       if not manager then
         return
       end
@@ -152,46 +177,143 @@ local nixvim_picker = {
           return
         end
 
-        local temp_buf = vim.api.nvim_create_buf(false, true)
-        vim.api.nvim_open_win(temp_buf, true, {
-          relative = "editor",
-          width = math.floor(vim.o.columns * 0.8),
-          height = math.floor(vim.o.lines * 0.8),
-          row = math.floor(vim.o.lines * 0.1),
-          col = math.floor(vim.o.columns * 0.1),
-          border = "rounded",
-          title = "New nixvim: " .. name,
-        })
+        local buf = vim.api.nvim_create_buf(false, true)
+        local default_content = { "{ pkgs, nixvim, builds, ...}: {}" }
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, default_content)
+        vim.api.nvim_set_option_value("filetype", "nix", { buf = buf })
 
-        local ns = vim.api.nvim_create_namespace("nixvim_edit")
-        vim.bo[temp_buf].filetype = "nix"
-
-        vim.api.nvim_buf_attach(temp_buf, false, {
-          on_detach = function()
-            local lines = vim.api.nvim_buf_get_lines(temp_buf, 0, -1, true)
+        Snacks.win({
+          title = "Create new Nixvim",
+          position = "float",
+          buf = buf,
+          footer_keys = { "create" },
+          enter = false,
+          keys = {
+            ["create"] = {
+              "<C-s>",
+              "create",
+            },
+          },
+          create = function(_)
+            local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
             local content = table.concat(lines, "\n")
 
-            manager:add(name, content, function(err)
-              call_hook(err)
-              picker:refresh()
-            end)
+            if content == "" then
+              return
+            end
+
+            manager:add({
+              name = name,
+              initial_content = content,
+            })
           end,
         })
       end)
-    end, "mutation", "add"),
-  },
+    end,
 
-  confirm = function(picker, item) end,
+    ---@param picker NixvimPicker
+    rotate_focus = function(_, picker)
+      ---@type snacks.win
+      local next
 
-  hooks = {
-    notify = function(err, manager, item)
-      if err then
-        vim.notify(("Action failed: %s"):format(err), vim.log.levels.ERROR)
+      if not picker._last_focused_win or picker._last_focused_win.id ~= picker.narea._win.id then
+        next = picker.narea._win
       else
-        vim.notify("Action succeeded", vim.log.levels.INFO)
+        next = picker._last_focused_win or picker.layout.wins.input
       end
+
+      picker._last_focused_win = next
+      next:focus()
     end,
   },
+
+  confirm = function()
+    --- important: do nothing
+  end,
+
+  layout = require("snacks.picker.config").layout("default"),
+
+  ---@param picker NixvimPicker
+  on_show = function(picker)
+    local events = picker.opts.events
+    if not events then
+      local EventEmitter = require("yalms.events.emitter")
+      events = EventEmitter:new()
+    end
+    picker.opts.events = events
+
+    local narea = picker.narea
+
+    if not narea then
+      local NArea = require("yalms.ui.narea")
+      local win = picker.layout.root
+      local win_id = win.win
+      local win_size = win:size()
+      local zindex = picker.layout.root.opts.zindex
+
+      narea = NArea:new({
+        win = {
+          position = "float",
+          relative = "win",
+          win = win_id,
+          anchor = "NW",
+          col = 0,
+          row = win_size.height,
+          width = win_size.width,
+          zindex = zindex,
+
+          actions = {
+            rotate_focus = function()
+              vim.print("Rotating focus...")
+              picker:focus()
+            end,
+          },
+
+          keys = {
+            ["<M-k>"] = "rotate_focus",
+          },
+        },
+      })
+    end
+    picker.narea = narea
+
+    narea:emit("notification", {
+      type = "Info",
+      text = "NixvimManager is loading...",
+    })
+
+    local manager = picker.manager
+    if not manager then
+      manager = require("yalms.nvm").setup({})
+    end
+    picker.manager = manager
+
+    local on_change = function()
+      vim.defer_fn(function()
+        picker:find()
+      end, 0)
+    end
+
+    manager:on("index", on_change):on("change", on_change)
+    manager:reload(function()
+      vim.defer_fn(function()
+        picker:find()
+        narea:emit("n", {
+          type = "Info",
+          text = "NixvimManager is ready.",
+        })
+      end, 0)
+    end)
+
+    picker:focus()
+  end,
+
+  ---@param picker NixvimPicker
+  on_close = function(picker)
+    if picker.narea then
+      picker.narea:hide()
+    end
+  end,
 
   win = {
     input = {
@@ -209,15 +331,6 @@ local nixvim_picker = {
   sort = {
     fields = { "name" },
   },
-}
-
----@type snacks.picker.Config
-local M = vim.tbl_extend("force", {
-  ft = "text",
-  title_format = "both",
-  auto_confirm = false,
-  auto_close = false,
-  hooks = nixvim_picker.hooks,
-}, nixvim_picker)
+} --[[@as snacks.picker.Config]])
 
 return M

@@ -1,227 +1,95 @@
 local fs = require("yalms.fs")
+local NixvimManagerUtils = require("yalms.nvm.utils")
+local EventEmitter = require("yalms.events.emitter")
 
-local GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-local DEBUG = os.getenv("DEBUG")
+---@alias NixvimManagerItemEventPayload { nixvim: Nixvim, manager: self }
+---@alias NixvimManagerItemEventCallback<T> (fun(s: NixvimManager, e: T, p: NixvimManagerItemEventPayload))
 
-local function log(level, ...)
-  if DEBUG then
-    local msg = ""
-    for i = 1, select("#", ...) do
-      msg = msg .. " " .. tostring(select(i, ...))
-    end
-    vim.schedule(function()
-      vim.print(string.format("[NixvimManager](%s) %s", level, msg))
-    end)
-  end
-end
+---@alias NixvimManagerEventOn<E, C> fun(self: NixvimManager, e: E, c: C)
+---@alias NixvimManagerOnEventsBasic<E> NixvimManagerEventOn<E, fun(e: E, p: EventEmitter)>
+---@alias NixvimManagerOnEventsItems<E> NixvimManagerEventOn<E, NixvimManagerItemEventCallback>
 
-local function nix_access_tokens()
-  local has_token = GITHUB_TOKEN ~= nil
-  log("DEBUG", "nix_access_tokens: token_present=" .. tostring(has_token))
-  if not GITHUB_TOKEN then
-    return nil
-  end
-  return string.format("github.com=%s", GITHUB_TOKEN)
-end
+---@alias NixvimManagerEventEmit<E, P> fun(self: NixvimManager, e: E, p: P)
+---@alias NixvimManagerEventEmitBasic<E> NixvimManagerEventOn<E, NixvimManager>
+---@alias NixvimManagerEventEmitItem<E> NixvimManagerEventOn<E, NixvimManagerItemEventPayload>
 
-local function read_local_file(name)
-  local src = debug.getinfo(1, "S").source
-  log("DEBUG", "read_local_file: name=" .. name .. " source=" .. tostring(src))
-  if src:sub(1, 1) == "@" then
-    local dir = src:sub(2):match("(.+)/[^/]+$")
-    if dir then
-      local f = io.open(dir .. "/" .. name, "r")
-      if f then
-        local content = f:read("*a")
-        f:close()
-        log("DEBUG", "read_local_file: success name=" .. name)
-        return content
-      end
-    end
-  end
-  log("DEBUG", "read_local_file: not_found name=" .. name)
-end
-
----Format the entire flake (best-effort, non-fatal).
----@param flake_dir string
-local function nix_fmt(flake_dir)
-  local cmd = { "nix", "fmt" }
-
-  local tokens = nix_access_tokens()
-  if tokens then
-    table.insert(cmd, "--option")
-    table.insert(cmd, "access-tokens")
-    table.insert(cmd, tokens)
-  end
-
-  log("DEBUG", "nix_fmt: flake_dir=" .. flake_dir .. " cmd=" .. vim.inspect(cmd))
-  vim.system(cmd, { text = true, cwd = flake_dir }, function(r)
-    log("DEBUG", "nix_fmt: flake_dir=" .. flake_dir .. " exit_code=" .. r.code)
-  end)
-end
-
----@param cmd string[]
----@param cb fun(err: string|nil, stdout: string|nil)
-local function run_async(cmd, cb)
-  log("DEBUG", "run_async: cmd=" .. vim.inspect(cmd))
-  vim.system(cmd, { text = true }, function(r)
-    if r.code ~= 0 then
-      local err_msg = r.stderr ~= "" and r.stderr or r.stdout
-      log("WARN", "run_async: error cmd=" .. vim.inspect(cmd) .. " err=" .. err_msg)
-      cb(err_msg, nil)
-    else
-      log("DEBUG", "run_async: success cmd=" .. vim.inspect(cmd))
-      cb(nil, r.stdout or "")
-    end
-  end)
-end
-
----@param flake_dir string
----@param attr string
----@param out_link string|nil   -- nil = no --out-link
----@param cb fun(err: string|nil, store_path: string|nil)
-local function nix_build(flake_dir, attr, out_link, cb)
-  local cmd = {
-    "nix",
-    "build",
-    string.format("%s#\"%s\"", flake_dir, attr),
-    "--print-out-paths",
-  }
-
-  if out_link and out_link ~= "" then
-    vim.list_extend(cmd, { "--out-link", out_link })
-  end
-
-  local tokens = nix_access_tokens()
-  if tokens then
-    table.insert(cmd, "--option")
-    table.insert(cmd, "access-tokens")
-    table.insert(cmd, tokens)
-  end
-
-  log(
-    "DEBUG",
-    "nix_build: flake_dir="
-      .. flake_dir
-      .. " attr="
-      .. attr
-      .. " out_link="
-      .. tostring(out_link)
-      .. " cmd="
-      .. vim.inspect(cmd)
-  )
-  vim.system(cmd, { text = true, cwd = flake_dir }, function(r)
-    if r.code ~= 0 then
-      local err_msg = r.stderr ~= "" and r.stderr or r.stdout
-      log(
-        "WARN",
-        "nix_build: error flake_dir=" .. flake_dir .. " attr=" .. attr .. " err=" .. err_msg
-      )
-      cb(err_msg, nil)
-      return
-    end
-    local path = (r.stdout or ""):match("^%s*(/[%S]+)%s*$")
-    if path then
-      log(
-        "DEBUG",
-        "nix_build: success flake_dir=" .. flake_dir .. " attr=" .. attr .. " store_path=" .. path
-      )
-      cb(nil, path)
-    else
-      local err_msg = "unexpected nix build output: " .. tostring(r.stdout)
-      log(
-        "WARN",
-        "nix_build: error flake_dir=" .. flake_dir .. " attr=" .. attr .. " err=" .. err_msg
-      )
-      cb(err_msg, nil)
-    end
-  end)
-end
-
-local function normalize(s)
-  return (s:gsub("^%s+", ""):gsub("%s+$", ""))
-end
+---@alias NixvimManagerOnEvents  NixvimManagerOnEventsBasic<'index'> | NixvimManagerOnEventsBasic<'ready'> | NixvimManagerOnEventsBasic<'change'> | NixvimManagerOnEventsItems<'build'>
+---@alias NixvimManagerEmitEvents NixvimManagerEventEmitBasic<'index'> | NixvimManagerEventEmitBasic<'ready'> | NixvimManagerEventEmitBasic<'change'> | NixvimManagerEventEmitItem<'build'>
+---@alias NixvimQueueItem {fn: fun(s: NixvimManager, a: unknown, c: fun(e?: string, s: NixvimManager)), arg: unknown}
 
 ---@class NixvimOpts
 ---@field name string
 ---@field initial_content? string   -- written to <dir>/<name>/nixvim.nix on add/update; NOT stored in config
 ---@field link? string      -- optional explicit out-link path passed to nix build
 ---@field dirs? string[]
----@field base? string     -- which base to extend from; defaults to "default"
 
----@class Nixvim   -- in-memory + JSON representation
----@field name string
----@field link string|nil   -- resolved store path / symlink
----@field dirs string[]|nil -- directories this config applies to; nil = default/fallback
----@field base string|nil   -- which base to extend from; nil = "default"
+---@class Nixvim: NixvimOpts
+---@field module? string
+---@field status NixvimStatus
+
+---@alias NixvimStatus "pending" | "building" | "built" | "failed"
 
 ---@class NixvimManagerOpts
----@field dir? string
+---@field dir? string | fun(): string
 ---@field initialTemplate? string
----@field bases? table<string, string>  -- declarative seed; name -> nix content
----@field nixvim? table<string, NixvimOpts>   -- declarative seed; string = content shorthand
----@field on_ready? fun(err: string|nil, self: NixvimManager)
+---@field nixvims? table<string, NixvimOpts>   -- declarative seed; string = content shorthand
 
 ---@class NixvimManagerRt : NixvimManagerOpts
 ---@field dir string
 ---@field flake_file string
 ---@field config_file string
 ---@field initialTemplate string
----@field on_ready fun(err: string|nil, self: NixvimManager)
----@field bases table<string, string>
----@field nixvim table<string, NixvimOpts>
+---@field nixvims table<string, NixvimOpts>
 
----@class NixvimManager
----@field nixvim table<string, Nixvim>
----@field bases table<string, string>
+---@class NixvimManager: EventEmitter<NixvimManagerEvents>
 ---@field private _opts NixvimManagerRt
+---@field _loaded? boolean
 ---@field private _error string
----@field private _ready boolean
----@field private _queue { fn: fun() }[]
+---@field private _queue NixvimQueueItem[]
+---@field on NixvimManagerOnEvents
+---@field emit NixvimManagerEmitEvents
 local NixvimManager = {}
 NixvimManager.__index = NixvimManager
-
--- ---------------------------------------------------------------------------
--- Construction
--- ---------------------------------------------------------------------------
+setmetatable(NixvimManager, { __index = EventEmitter })
 
 ---@param opts? NixvimManagerOpts
 function NixvimManager:new(opts)
-  log("DEBUG", "new: initialising with opts.dir=" .. tostring(opts and opts.dir or "nil"))
-  local o = setmetatable({}, self)
-  o.bases = {}
-  o.nixvim = {}
-  o._ready = false
+  NixvimManagerUtils.log(
+    "DEBUG",
+    "new: initialising with opts.dir=" .. tostring(opts and opts.dir or "nil")
+  )
 
-  o._queue = {}
-  o._opts = o:_build_opts(opts or {})
+  opts = opts or {}
+  local obj = EventEmitter.new(self)
+  ---@cast obj NixvimManager
+  obj.nixvims = opts.nixvims or {}
+  obj._loaded = false
+  obj:_init_events()
 
-  log("DEBUG", "new: starting reload")
-  o:_do_reload(function(err)
-    if err then
-      log("WARN", "new: reload error=" .. err)
-      ---@diagnostic disable-next-line: invisible
-      o:_finalize_init(err)
-      return
-    end
-    log("DEBUG", "new: sync declared")
-    ---@diagnostic disable-next-line: invisible
-    o:_sync_declared(function()
-      ---@diagnostic disable-next-line: invisible
-      o:_finalize_init(nil)
+  obj._queue = {}
+  obj._opts = obj:_build_opts(opts or {})
+  obj:_reload()
+  return obj
+end
+
+function NixvimManager:_init_events()
+  for _, event in ipairs({ "build", "remove" }) do
+    self:on(event, function()
+      self:emit("change", self)
     end)
-  end)
-
-  return o
+  end
 end
 
 ---@private
+---@param opts NixvimManagerOpts
 function NixvimManager:_build_opts(opts)
-  log("DEBUG", "_build_opts: building opts")
-  local dir = opts.dir or os.getenv("NIXVIM_MANAGER_DIR") or (os.getenv("HOME") .. "/.nixvim")
+  NixvimManagerUtils.log("DEBUG", "_build_opts: building opts")
+  local dir = (opts.dir and (type(opts.dir == "string") and opts.dir or opts.dir()))
+    or os.getenv("NIXVIM_MANAGER_DIR")
+    or (os.getenv("HOME") .. "/.nixvim")
 
   local template = (opts.initialTemplate and opts.initialTemplate ~= "") and opts.initialTemplate
-    or read_local_file("flake-template.nix")
+    or NixvimManagerUtils.read_local_file("flake-template.nix")
     or ""
 
   local o = {
@@ -229,48 +97,65 @@ function NixvimManager:_build_opts(opts)
     flake_file = dir .. "/flake.nix",
     config_file = dir .. "/config.json",
     initialTemplate = template,
-    on_ready = opts.on_ready or function() end,
-    bases = opts.bases or {},
-    nixvim = opts.nixvim or {},
+    nixvims = opts.nixvims or {},
   }
 
-  log(
+  NixvimManagerUtils.log(
     "DEBUG",
     "new: opts dir=" .. dir .. " flake_file=" .. o.flake_file .. " config_file=" .. o.config_file
   )
 
   fs.touch(o.flake_file, true, o.initialTemplate)
-  fs.touch(o.config_file, true, "{}") -- only creates when missing
 
   return o
 end
 
--- ---------------------------------------------------------------------------
--- Init helpers
--- ---------------------------------------------------------------------------
-
 ---@private
-function NixvimManager:_finalize_init(err)
-  log("DEBUG", "_finalize_init: err=" .. tostring(err))
-  self._error = err
-  self._ready = true
-  self._opts.on_ready(err, self)
-  local queue = self._queue
-  self._queue = {}
-  log("DEBUG", "_finalize_init: executing queue, count=" .. #queue)
-  for _, item in ipairs(queue) do
-    item.fn()
-  end
+function NixvimManager:_enqueue(...)
+  NixvimManagerUtils.log("DEBUG", "_enqueue_or_run: queued, queue_len=" .. (#self._queue + 1))
+  table.insert(self._queue, { ... })
 end
 
 ---@private
-function NixvimManager:_enqueue_or_run(fn)
-  if self._ready then
-    log("DEBUG", "_enqueue_or_run: executing immediately")
-    fn()
+function NixvimManager:_enqueue_or_run(...)
+  if self._loaded then
+    NixvimManagerUtils.log("DEBUG", "_enqueue_or_run: executing immediately")
+    local f = select(1, ...)
+    local a = select(2, ...)
+    local c = select(3, ...)
+    f(self, a, c)
   else
-    log("DEBUG", "_enqueue_or_run: queued, queue_len=" .. (#self._queue + 1))
-    table.insert(self._queue, { fn = fn })
+    NixvimManagerUtils.log("DEBUG", "_enqueue_or_run: queued, queue_len=" .. (#self._queue + 1))
+    self:_enqueue(...)
+  end
+end
+
+---@param cb fun()
+function NixvimManager:_drain_queue(cb)
+  ---@type NixvimQueueItem
+  local next = table.remove(self._queue)
+
+  if next then
+    local f = next[1]
+    local a = next[2]
+    local c = next[3]
+    return f(self, a, function(e, s)
+      if e then
+        self:emit("error", { error = e, manager = self })
+      end
+
+      c(e, s)
+      self:_drain_queue(cb)
+    end)
+  end
+
+  if not self._loaded then
+    self._loaded = true
+    self:emit("ready", self)
+  end
+
+  if cb then
+    cb()
   end
 end
 
@@ -280,571 +165,145 @@ end
 
 ---@private
 function NixvimManager:_save_config()
-  -- Save bases as array of keys (preserving order isn't critical for functionality)
-  local bases_array = {}
-  if self.bases then
-    for name, _ in pairs(self.bases) do
-      table.insert(bases_array, name)
-    end
-  end
-
-  -- Save nixvims as dict
-  local nixvims_out = {}
-  local has_nixvims = false
-  if self.nixvim then
-    for name, entry in pairs(self.nixvim) do
-      nixvims_out[name] = { name = name, link = entry.link, dirs = entry.dirs, base = entry.base }
-      has_nixvims = true
-    end
-  end
-
   local config = {
-    bases = bases_array,
-    nixvims = has_nixvims and nixvims_out or setmetatable({}, { __jsontype = "object" }),
+    nixvims = self.nixvims,
   }
 
-  log(
-    "DEBUG",
-    "_save_config: bases_count="
-      .. #bases_array
-      .. " nixvims_count="
-      .. (has_nixvims and vim.tbl_count(nixvims_out) or 0)
-  )
+  NixvimManagerUtils.log("DEBUG", "_save_config", vim.inspect(config))
   local ok, err = fs.write_file(self._opts.config_file, vim.json.encode(config))
   if not ok then
-    log("WARN", "_save_config: error=" .. tostring(err))
+    NixvimManagerUtils.log("WARN", "_save_config: error=" .. tostring(err))
     self:_notify("nixvim: failed to save config: " .. tostring(err), vim.log.levels.WARN)
   end
 end
 
 ---@private
-function NixvimManager:_save_base(name, content)
-  log("DEBUG", "_save_base: name=" .. name)
-  local base_file = self._opts.dir .. "/_" .. name .. ".nix"
-  local ok, err = fs.write_file(base_file, content)
-  if not ok then
-    log("WARN", "_save_base: error name=" .. name .. " err=" .. tostring(err))
-    self:_notify(
-      "nixvim: failed to save base '" .. name .. "': " .. tostring(err),
-      vim.log.levels.WARN
-    )
-  end
-  return ok, err
-end
-
-function NixvimManager:add_base(opts, cb)
-  log("DEBUG", "add_base: name=" .. opts.name)
-  self:_enqueue_or_run(function()
-    self:_add_base_internal(opts, cb)
-  end)
-end
-
----@param opts {name: string, content: string}
----@param cb? fun(err: string|nil)
-function NixvimManager:update_base(opts, cb)
-  log("DEBUG", "update_base: name=" .. opts.name)
-  self:_enqueue_or_run(function()
-    self:_update_base_internal(opts, cb)
-  end)
-end
-
----@param name string
----@param cb? fun(err: string|nil)
-function NixvimManager:remove_base(name, cb)
-  log("DEBUG", "remove_base: name=" .. name)
-  self:_enqueue_or_run(function()
-    if not self.bases[name] then
-      log("WARN", "remove_base: not_found name=" .. name)
-      if cb then
-        cb("base not found: " .. name)
-      end
-      return
-    end
-
-    local base_file = self._opts.dir .. "/_" .. name .. ".nix"
-    run_async({ "rm", "-f", base_file }, function(err)
-      if not err then
-        self.bases[name] = nil
-        self:_save_config()
-        log("DEBUG", "remove_base: success name=" .. name)
-      else
-        log("WARN", "remove_base: error name=" .. name .. " err=" .. tostring(err))
-      end
-      if cb then
-        cb(err)
-      end
-    end)
-  end)
-end
-
----@param cb? fun(err: string|nil, bases: string[])
-function NixvimManager:list_bases(cb)
-  self:_enqueue_or_run(function()
-    local base_names = {}
-    for name, _ in pairs(self.bases) do
-      table.insert(base_names, name)
-    end
-    table.sort(base_names) -- consistent ordering
-    log("DEBUG", "list_bases: count=" .. #base_names)
-    if cb then
-      cb(nil, base_names)
-    end
-  end)
-end
-
----@private
-function NixvimManager:_add_base_internal(opts, cb)
-  local name = opts.name
-  local content = opts.content
-
-  log("DEBUG", "_add_base_internal: name=" .. name)
-  -- Validate name (must be filename-safe)
-  if name:match("[/\\]") then
-    log("WARN", "_add_base_internal: invalid name=" .. name .. " err=path separators")
-    if cb then
-      cb("base name cannot contain path separators: " .. name)
-    end
-    return
-  end
-
-  local base_file = self._opts.dir .. "/_" .. name .. ".nix"
-
-  -- Check if already exists
-  if self.bases[name] then
-    log("WARN", "_add_base_internal: already_exists name=" .. name)
-    if cb then
-      cb("base already exists: " .. name)
-    end
-    return
-  end
-
-  local ok, write_err = fs.write_file(base_file, content)
-  if not ok then
-    log("WARN", "_add_base_internal: error name=" .. name .. " err=" .. tostring(write_err))
-    if cb then
-      cb(tostring(write_err), nil)
-    end
-    return
-  end
-
-  self.bases[name] = content
-  self:_save_config()
-  log("DEBUG", "_add_base_internal: success name=" .. name)
-
-  if cb then
-    cb(nil)
-  end
-end
-
----@private
-function NixvimManager:_update_base_internal(opts, cb)
-  local name = opts.name
-  local content = opts.content
-
-  log("DEBUG", "_update_base_internal: name=" .. name)
-  -- Validate name
-  if name:match("[/\\]") then
-    log("WARN", "_update_base_internal: invalid name=" .. name .. " err=path separators")
-    if cb then
-      cb("base name cannot contain path separators: " .. name)
-    end
-    return
-  end
-
-  local base_file = self._opts.dir .. "/_" .. name .. ".nix"
-
-  -- Check if exists
-  if not self.bases[name] then
-    log("WARN", "_update_base_internal: not_found name=" .. name)
-    if cb then
-      cb("base not found: " .. name)
-    end
-    return
-  end
-
-  -- Detect if content actually changed
-  local existing_content = self.bases[name]
-  if existing_content == content then
-    log("DEBUG", "_update_base_internal: unchanged name=" .. name)
-    if cb then
-      cb(nil)
-    end
-    return
-  end
-
-  local ok, write_err = fs.write_file(base_file, content)
-  if not ok then
-    log("WARN", "_update_base_internal: error name=" .. name .. " err=" .. tostring(write_err))
-    if cb then
-      cb(tostring(write_err), nil)
-    end
-    return
-  end
-
-  self.bases[name] = content
-  self:_save_config()
-  log("DEBUG", "_update_base_internal: success name=" .. name)
-
-  if cb then
-    cb(nil)
-  end
-end
-
----@private
----@return {bases: string[], nixvims: table<string, Nixvim>}|nil
 function NixvimManager:_load_config()
+  fs.touch(self._opts.config_file, true, [[{ "nixvims": { "__jsontype": "" }}]])
+
   local ok, content = pcall(fs.read_file, self._opts.config_file)
   if not ok or not content or content == "" then
-    log("DEBUG", "_load_config: empty or missing config")
+    NixvimManagerUtils.log("DEBUG", "_load_config: empty or missing config")
     return nil
   end
 
-  log("DEBUG", "_load_config: raw_content=" .. content:sub(1, 200))
+  NixvimManagerUtils.log("DEBUG", "_load_config: raw_content=" .. content:sub(1, 200))
   local ok2, config = pcall(vim.json.decode, content)
   if not ok2 or type(config) ~= "table" then
-    log("WARN", "_load_config: parse failed")
+    NixvimManagerUtils.log("WARN", "_load_config: parse failed")
     return nil
   end
 
-  -- Validate structure
-  if type(config.bases) ~= "table" or type(config.nixvims) ~= "table" then
-    log("WARN", "_load_config: invalid structure")
-    return nil
-  end
+  self.nixvims =
+    vim.tbl_extend("force", config.nixvims or {}, self._opts.nixvims or {}, { __jsontype = "" })
 
-  -- Convert bases array to set for easier lookup
-  local bases_set = {}
-  for _, base_name in ipairs(config.bases) do
-    if type(base_name) == "string" then
-      bases_set[base_name] = true
-    end
-  end
-
-  log(
-    "DEBUG",
-    "_load_config: bases_count="
-      .. #config.bases
-      .. " nixvims_count="
-      .. vim.tbl_count(config.nixvims)
-  )
-  return {
-    bases = config.bases, -- keep as array for persistence
-    _bases_set = bases_set, -- for quick lookup
-    nixvims = config.nixvims,
-  }
+  NixvimManagerUtils.log("DEBUG", "_load_config: success")
+  return self:_save_config()
 end
 
--- ---------------------------------------------------------------------------
--- Reload  (cold start — no cache)
--- ---------------------------------------------------------------------------
+---@param cb? fun(err: string|nil, success: boolean)
+---@param force? boolean
+function NixvimManager:reload(cb, force)
+  if self._loaded and not force then
+    return cb and cb(nil, true)
+  end
 
----@param cb? fun(err: string|nil)
-function NixvimManager:reload(cb)
-  log("DEBUG", "reload: triggered")
-  self:_enqueue_or_run(function()
-    self:_do_reload(cb)
-  end)
+  self:_reload(cb)
 end
 
----@private
-function NixvimManager:_do_reload(cb)
-  log("DEBUG", "_do_reload: starting")
-  local ok, err = pcall(function()
-    local cached = self:_load_config()
-    if not cached then
-      log("DEBUG", "_do_reload: no cached config")
+function NixvimManager:_reload(cb)
+  self:_load_config()
+  local dir = self._opts.dir
+  local nixvims = self:get_nixvims()
+
+  for name, entry in pairs(nixvims) do
+    local module = string.format("%s/%s/nixvim.nix", dir, name)
+    local link = string.format("%s/%s/nvim", dir, name)
+    fs.touch(module, true, entry.initial_content)
+
+    local existing = self.nixvims[name]
+    self.nixvims[name] = {
+      name = name,
+      module = module,
+      link = existing.link or link,
+      dirs = entry.dirs,
+      content = self.nixvims[name].initial_content or "{}",
+      status = existing.status or "pending",
+    }
+  end
+
+  self:emit("index", self)
+  self:_save_config()
+
+  for _, nixvim in pairs(nixvims) do
+    self:_enqueue(self._rebuild, nixvim.name, function() end)
+  end
+
+  if not nixvims["default"] then
+    self:_enqueue(self._rebuild, "default", function() end)
+  end
+
+  self:_drain_queue(cb)
+end
+
+---@param name string default: 'default'
+---@param cb? fun(err?: string, nixvim?: Nixvim)
+function NixvimManager:rebuild(name, cb)
+  NixvimManagerUtils.log("DEBUG", "rebuild: name=" .. name)
+  self:_enqueue_or_run(self._rebuild, name, cb)
+end
+
+---@param name? string default: 'default'
+---@param cb? fun(err?: string, nixvim?: Nixvim)
+function NixvimManager:_rebuild(name, cb)
+  local nixvim = self.nixvims[name or "default"]
+  if not nixvim then
+    return cb and cb("Not found!")
+  end
+
+  nixvim.status = "building"
+
+  NixvimManagerUtils.nix_build(function(err2, store_path, link)
+    if err2 or not store_path then
+      NixvimManagerUtils.log("WARN", "_do_reload: rebuild failed", name, err2)
+      nixvim.status = "failed"
       if cb then
-        cb(nil)
+        cb(err2, nil)
       end
-      return
-    end
-
-    -- Load bases
-    self.bases = {}
-    local bases_loaded = 0
-    if cached.bases then
-      for _, base_name in ipairs(cached.bases) do
-        if type(base_name) == "string" then
-          local base_file = self._opts.dir .. "/_" .. base_name .. ".nix"
-          local content = fs.read_file(base_file)
-          if content then
-            self.bases[base_name] = content
-            bases_loaded = bases_loaded + 1
-          end
-        end
-      end
-    end
-    log("DEBUG", "_do_reload: bases_loaded=" .. bases_loaded)
-
-    -- Load nixvims
-    self.nixvim = {}
-    local nixvims_loaded = 0
-    if cached.nixvims then
-      for name, entry in pairs(cached.nixvims) do
-        self.nixvim[name] = {
-          name = entry.name,
-          link = entry.link,
-          dirs = entry.dirs,
-          base = entry.base or "default",
-        }
-        nixvims_loaded = nixvims_loaded + 1
-      end
-    end
-    log("DEBUG", "_do_reload: nixvims_loaded=" .. nixvims_loaded)
-
-    -- Rebuild any entries that were persisted without a link.
-    local dir = self._opts.dir
-    local pending = {}
-    for name, entry in pairs(self.nixvim) do
-      if not entry.link then
-        table.insert(pending, name)
-      end
-    end
-
-    if #pending == 0 then
-      log("DEBUG", "_do_reload: no rebuilds needed")
+    else
+      nixvim.store_path = store_path
+      nixvim.link = link
+      nixvim.status = "built"
+      NixvimManagerUtils.log("DEBUG", "_do_reload: rebuilt", name)
+      self:emit("build", { nixvim = nixvim, manager = self })
       if cb then
-        cb(nil)
-      end
-      return
-    end
-
-    log("DEBUG", "_do_reload: rebuilding pending_count=" .. #pending)
-    local remaining = #pending
-    for _, name in ipairs(pending) do
-      nix_build(dir, name, nil, function(_, store_path)
-        if store_path then
-          self.nixvim[name].link = store_path .. "/bin/nvim"
-          log(
-            "DEBUG",
-            "_do_reload: rebuild_success name=" .. name .. " link=" .. self.nixvim[name].link
-          )
-        else
-          log("WARN", "_do_reload: rebuild_failed name=" .. name)
-        end
-        remaining = remaining - 1
-        if remaining == 0 then
-          self:_save_config()
-          log("DEBUG", "_do_reload: rebuilds_complete")
-          if cb then
-            cb(nil)
-          end
-        end
-      end)
-    end
-  end)
-
-  if not ok then
-    log("WARN", "_do_reload: error=" .. tostring(err))
-    cb(err)
-  end
-end
-
--- ---------------------------------------------------------------------------
--- Sync declared (called once during init, after _do_reload)
--- ---------------------------------------------------------------------------
-
----@private
-function NixvimManager:_sync_declared(cb)
-  log("DEBUG", "_sync_declared: starting")
-  -- First sync bases
-  local declared_bases = self._opts.bases
-  local base_entries = {}
-  if next(declared_bases) then
-    for name, content in pairs(declared_bases) do
-      table.insert(base_entries, { name = name, content = content })
-    end
-  end
-  log("DEBUG", "_sync_declared: base_entries_count=" .. #base_entries)
-
-  if #base_entries > 0 then
-    local base_remaining = #base_entries
-    local function base_done()
-      base_remaining = base_remaining - 1
-      log("DEBUG", "_sync_declared: base_done remaining=" .. base_remaining)
-      if base_remaining == 0 then
-        -- Now sync nixvims
-        self:_sync_declared_nixvims(cb)
+        cb(nil, nixvim)
       end
     end
-
-    for _, entry in ipairs(base_entries) do
-      if self.bases[entry.name] then
-        -- Update existing base
-        self:_update_base_internal(entry, base_done)
-      else
-        -- Add new base
-        self:_add_base_internal(entry, base_done)
-      end
-    end
-  else
-    -- No bases declared, sync nixvims directly
-    log("DEBUG", "_sync_declared: no base_entries, syncing nixvims")
-    self:_sync_declared_nixvims(cb)
-  end
+  end, self:get_dir(), name, nixvim.link)
 end
-
----@private
-function NixvimManager:_sync_declared_nixvims(cb)
-  local declared = self._opts.nixvim
-  if not next(declared) then
-    log("DEBUG", "_sync_declared_nixvims: no declared nixvims")
-    cb()
-    return
-  end
-
-  local entries = {}
-  for name, v in pairs(declared) do
-    local entry = type(v) == "string" and { name = name, initial_content = v }
-      or vim.tbl_extend("force", v, { name = name })
-    table.insert(entries, entry)
-  end
-  log("DEBUG", "_sync_declared_nixvims: entries_count=" .. #entries)
-
-  local remaining = #entries
-  local function done()
-    remaining = remaining - 1
-    log("DEBUG", "_sync_declared_nixvims: done remaining=" .. remaining)
-    if remaining == 0 then
-      cb()
-    end
-  end
-
-  for _, entry in ipairs(entries) do
-    if self.nixvim[entry.name] then
-      self:_update_internal(entry, done)
-    else
-      self:_add_internal(entry, done)
-    end
-  end
-end
-
----@private
-function NixvimManager:_sync_declared_nixvims(cb)
-  local declared = self._opts.nixvim
-  if not next(declared) then
-    log("DEBUG", "_sync_declared_nixvims: no declared nixvims")
-    cb()
-    return
-  end
-
-  local entries = {}
-  for name, v in pairs(declared) do
-    local entry = type(v) == "string" and { name = name, initial_content = v }
-      or vim.tbl_extend("force", v, { name = name })
-    table.insert(entries, entry)
-  end
-  log("DEBUG", "_sync_declared_nixvims: entries_count=" .. #entries)
-
-  local remaining = #entries
-  local function done()
-    remaining = remaining - 1
-    log("DEBUG", "_sync_declared_nixvims: done remaining=" .. remaining)
-    if remaining == 0 then
-      cb()
-    end
-  end
-
-  for _, entry in ipairs(entries) do
-    if self.nixvim[entry.name] then
-      self:_update_internal(entry, done)
-    else
-      self:_add_internal(entry, done)
-    end
-  end
-end
-
--- ---------------------------------------------------------------------------
--- Public API
--- ---------------------------------------------------------------------------
 
 ---@param opts NixvimOpts
 ---@param cb? fun(err?: string, nixvim?: Nixvim)
 function NixvimManager:add(opts, cb)
-  log(
-    "DEBUG",
-    "add: name="
-      .. opts.name
-      .. " base="
-      .. tostring(opts.base)
-      .. " dirs="
-      .. vim.inspect(opts.dirs)
-  )
-
-  self:_enqueue_or_run(function()
-    self:_add_internal(opts, cb)
-  end)
+  NixvimManagerUtils.log("DEBUG", "add: name=" .. opts.name .. " dirs=" .. vim.inspect(opts.dirs))
+  self:_enqueue_or_run(self._add, opts, cb)
 end
-
----@param opts NixvimOpts|string
----@param cb? fun(err: string|nil, nixvim: Nixvim|nil)
-function NixvimManager:update(opts, cb)
-  if type(opts) == "string" then
-    opts = { name = opts }
-  end
-  log("DEBUG", "update: name=" .. opts.name)
-  self:_enqueue_or_run(function()
-    self:_update_internal(opts, cb)
-  end)
-end
-
----@param name string
----@param cb? fun(err: string|nil)
-function NixvimManager:remove(name, cb)
-  log("DEBUG", "remove: name=" .. name)
-  self:_enqueue_or_run(function()
-    if not self.nixvim[name] then
-      log("WARN", "remove: not_found name=" .. name)
-      if cb then
-        cb("not found")
-      end
-      return
-    end
-
-    run_async({ "rm", "-rf", string.format("%s/%s", self._opts.dir, name) }, function(err)
-      if not err then
-        self.nixvim[name] = nil
-        self:_save_config()
-        log("DEBUG", "remove: success name=" .. name)
-      else
-        log("WARN", "remove: error name=" .. name .. " err=" .. tostring(err))
-      end
-      if cb then
-        cb(err)
-      end
-    end)
-  end)
-end
-
----@param name string
----@param cb fun(err: string|nil, nixvim: Nixvim|nil)
-function NixvimManager:get(name, cb)
-  log("DEBUG", "get: name=" .. name)
-  self:_enqueue_or_run(function()
-    local entry = self.nixvim[name]
-    log("DEBUG", "get: name=" .. name .. " found=" .. tostring(entry ~= nil))
-    cb(entry and nil or "not found", entry)
-  end)
-end
-
--- ---------------------------------------------------------------------------
--- Internal add / update
--- ---------------------------------------------------------------------------
 
 ---@private
 ---@param opts NixvimOpts
 ---@param cb? fun(err?: string, item?: Nixvim)
-function NixvimManager:_add_internal(opts, cb)
+function NixvimManager:_add(opts, cb)
   local name = opts.name
   local content = (opts.initial_content and opts.initial_content ~= "") and opts.initial_content
     or "{}"
   local dir = self._opts.dir
   local module_path = string.format("%s/%s/nixvim.nix", dir, name)
 
-  log("DEBUG", "_add_internal: name=" .. name .. " module_path=" .. module_path)
+  NixvimManagerUtils.log("DEBUG", "_add_internal: name=" .. name .. " module_path=" .. module_path)
   local ok, err = fs.touch(module_path, true, content)
   if not ok then
-    log("WARN", "_add_internal: error name=" .. name .. " err=" .. tostring(err))
+    NixvimManagerUtils.log("WARN", "_add_internal: error name=" .. name .. " err=" .. tostring(err))
     if cb then
       cb(tostring(err), nil)
     end
@@ -853,16 +312,22 @@ function NixvimManager:_add_internal(opts, cb)
 
   -- The flake reads config.json to discover which packages to expose, so the
   -- entry must be persisted before nix_build is invoked.
-  self.nixvim[name] = { name = name, link = nil, dirs = opts.dirs, base = opts.base or "default" }
+  self.nixvims[name] = { name = name, link = nil, dirs = opts.dirs, status = "pending" }
   self:_save_config()
-  log("DEBUG", "_add_internal: persisted name=" .. name)
+  NixvimManagerUtils.log("DEBUG", "_add_internal: persisted name=" .. name)
 
-  nix_fmt(dir)
+  NixvimManagerUtils.nix_fmt(dir)
 
-  nix_build(dir, name, opts.link, function(build_err, store_path)
+  self.nixvims[name].status = "building"
+
+  NixvimManagerUtils.nix_build(function(build_err, store_path, link)
     if build_err or not store_path then
-      log("WARN", "_add_internal: build_failed name=" .. name .. " err=" .. tostring(build_err))
-      self.nixvim[name] = nil -- roll back memory and config
+      NixvimManagerUtils.log(
+        "WARN",
+        "_add_internal: build_failed name=" .. name .. " err=" .. tostring(build_err)
+      )
+      self.nixvims[name].status = "failed"
+      self.nixvims[name] = nil -- roll back memory and config
       self:_save_config()
       if cb then
         cb(build_err, nil)
@@ -870,22 +335,70 @@ function NixvimManager:_add_internal(opts, cb)
       return
     end
 
-    local link = (opts.link and opts.link ~= "") and opts.link or (store_path .. "/bin/nvim")
-    self.nixvim[name].link = link
+    self.nixvims[name].store_path = store_path
+    self.nixvims[name].link = link
+    self.nixvims[name].status = "built"
+    self:emit("build", { nixvim = self.nixvims[name], manager = self })
     self:_save_config()
-    log("DEBUG", "_add_internal: success name=" .. name .. " link=" .. link)
+    NixvimManagerUtils.log("DEBUG", "_add_internal: success name=" .. name)
     if cb then
-      cb(nil, self.nixvim[name])
+      cb(nil, self.nixvims[name])
     end
-  end)
+  end, dir, name, opts.link)
+end
+
+---@param opts NixvimOpts|string
+---@param cb? fun(err: string|nil, nixvim: Nixvim|nil)
+function NixvimManager:update(opts, cb)
+  if type(opts) == "string" then
+    opts = { name = opts }
+  end
+
+  NixvimManagerUtils.log("DEBUG", "update: name=" .. opts.name)
+  self:_enqueue_or_run(self._update, opts, cb)
+end
+
+---@param name string
+---@param cb? fun(err: string|nil, name: string|nil)
+function NixvimManager:remove(name, cb)
+  NixvimManagerUtils.log("DEBUG", "remove: name=" .. name)
+
+  self:_enqueue_or_run(function()
+    if not self.nixvims[name] then
+      NixvimManagerUtils.log("WARN", "remove: not_found name=" .. name)
+      if cb then
+        cb("not found", nil)
+      end
+      return
+    end
+
+    NixvimManagerUtils.run_async(
+      { "rm", "-rf", string.format("%s/%s", self._opts.dir, name) },
+      function(err)
+        if not err then
+          local entry = self.nixvims[name]
+          self.nixvims[name] = nil
+          self:_save_config()
+          self:emit("remove", entry)
+          NixvimManagerUtils.log("DEBUG", "remove: success name=" .. name)
+        else
+          NixvimManagerUtils.log("WARN", "remove: error name=" .. name .. " err=" .. tostring(err))
+        end
+
+        if cb then
+          cb(err, name)
+        end
+      end
+    )
+  end, cb)
 end
 
 ---@private
-function NixvimManager:_update_internal(opts, cb)
+function NixvimManager:_update(opts, cb)
   local name = opts.name
-  local entry = self.nixvim[name]
+  local entry = self.nixvims[name]
   if not entry then
-    log("WARN", "_update_internal: not_found name=" .. name)
+    NixvimManagerUtils.log("WARN", "_update_internal: not_found name=" .. name)
     if cb then
       cb("not found", nil)
     end
@@ -898,11 +411,13 @@ function NixvimManager:_update_internal(opts, cb)
   -- Detect whether the on-disk content actually changed.
   local existing_raw = fs.read_file(module_path)
   local incoming = opts.initial_content or ""
-  local content_changed = not (existing_raw and normalize(existing_raw) == normalize(incoming))
+  local content_changed = not (
+    existing_raw
+    and NixvimManagerUtils.normalize(existing_raw) == NixvimManagerUtils.normalize(incoming)
+  )
   local dirs_changed = not vim.deep_equal(entry.dirs, opts.dirs)
-  local base_changed = (opts.base or "default") ~= (entry.base or "default")
 
-  log(
+  NixvimManagerUtils.log(
     "DEBUG",
     "_update_internal: name="
       .. name
@@ -910,12 +425,10 @@ function NixvimManager:_update_internal(opts, cb)
       .. tostring(content_changed)
       .. " dirs_changed="
       .. tostring(dirs_changed)
-      .. " base_changed="
-      .. tostring(base_changed)
   )
 
-  if not content_changed and not dirs_changed and not base_changed then
-    log("DEBUG", "_update_internal: unchanged name=" .. name)
+  if not content_changed and not dirs_changed then
+    NixvimManagerUtils.log("DEBUG", "_update_internal: unchanged name=" .. name)
     if cb then
       cb(nil, entry)
     end
@@ -925,53 +438,78 @@ function NixvimManager:_update_internal(opts, cb)
   if content_changed then
     local ok, write_err = fs.write_file(module_path, incoming ~= "" and incoming or "{}")
     if not ok then
-      log("WARN", "_update_internal: write_error name=" .. name .. " err=" .. tostring(write_err))
+      NixvimManagerUtils.log(
+        "WARN",
+        "_update_internal: write_error name=" .. name .. " err=" .. tostring(write_err)
+      )
       if cb then
         cb(tostring(write_err), nil)
       end
       return
     end
 
-    -- Rebuild required; hold the old link in memory until the build succeeds.
-    local old_link = entry.link
-    log("DEBUG", "_update_internal: rebuilding name=" .. name)
-    nix_fmt(dir)
-    nix_build(dir, name, opts.link, function(err, store_path)
+    NixvimManagerUtils.log("DEBUG", "_update_internal: rebuilding name=" .. name)
+    NixvimManagerUtils.nix_fmt(dir)
+    self.nixvims[name].status = "building"
+
+    NixvimManagerUtils.nix_build(function(err, store_path, link)
       if err or not store_path then
-        -- Restore old link — config on disk is still valid from last save.
-        self.nixvim[name].link = old_link
-        log("WARN", "_update_internal: rebuild_failed name=" .. name .. " err=" .. tostring(err))
+        NixvimManagerUtils.log(
+          "WARN",
+          "_update_internal: rebuild_failed name=" .. name .. " err=" .. tostring(err)
+        )
+        self.nixvims[name].status = "failed"
         if cb then
           cb(err, nil)
         end
         return
       end
 
-      local link = (opts.link and opts.link ~= "") and opts.link or (store_path .. "/bin/nvim")
-      self.nixvim[name].link = link
-      self.nixvim[name].dirs = opts.dirs
-      self.nixvim[name].base = opts.base or "default"
+      self.nixvims[name].store_path = store_path
+      self.nixvims[name].link = link
+      self.nixvims[name].dirs = opts.dirs
+      self.nixvims[name].status = "built"
+      self:emit("build", { nixvim = self.nixvims[name], manager = self })
       self:_save_config()
-      log("DEBUG", "_update_internal: rebuild_success name=" .. name .. " link=" .. link)
+      NixvimManagerUtils.log("DEBUG", "_update_internal: rebuild_success name=" .. name)
       if cb then
-        cb(nil, self.nixvim[name])
+        cb(nil, self.nixvims[name])
       end
-    end)
+    end, dir, name, opts.link)
   else
-    -- Only dirs or base changed — no rebuild needed.
-    log("DEBUG", "_update_internal: metadata_only name=" .. name)
-    self.nixvim[name].dirs = opts.dirs
-    self.nixvim[name].base = opts.base or "default"
+    -- Only dirs changed — no rebuild needed.
+    NixvimManagerUtils.log("DEBUG", "_update_internal: metadata_only name=" .. name)
+    self.nixvims[name].dirs = opts.dirs
     self:_save_config()
     if cb then
-      cb(nil, self.nixvim[name])
+      cb(nil, self.nixvims[name])
     end
   end
 end
 
--- ---------------------------------------------------------------------------
--- Link resolution
--- ---------------------------------------------------------------------------
+---@param name string
+---@param cb fun(err: string|nil, nixvim: Nixvim|nil)
+function NixvimManager:get(name, cb)
+  NixvimManagerUtils.log("DEBUG", "get: name=" .. name)
+  self:_enqueue_or_run(function()
+    local err
+    local entry = self.nixvims[name]
+
+    if not entry then
+      err = "Not found!"
+    end
+
+    NixvimManagerUtils.log("DEBUG", "get: name=" .. name .. " found=" .. tostring(entry ~= nil))
+    cb(err, entry)
+  end, cb)
+end
+
+---@param name string
+---@return NixvimStatus|nil
+function NixvimManager:get_status(name)
+  local entry = self.nixvims[name]
+  return entry and entry.status or nil
+end
 
 ---Resolve the nvim link for an optional directory.
 ---
@@ -983,13 +521,14 @@ end
 ---@param dir? string   absolute path of the current working directory
 ---@return string|nil link   path to the nvim binary, or nil if none is built yet
 function NixvimManager:resolve_link(dir)
-  log("DEBUG", "resolve_link: dir=" .. tostring(dir))
+  NixvimManagerUtils.log("DEBUG", "resolve_link: dir=" .. tostring(dir))
   -- Collect entries that have a valid link.
   local default_link
   local best_match_link
   local best_match_len = 0
+  local nixvims = self:get_nixvims()
 
-  for _, entry in pairs(self.nixvim) do
+  for _, entry in pairs(nixvims) do
     if not entry.link then
       goto continue
     end
@@ -1014,7 +553,7 @@ function NixvimManager:resolve_link(dir)
   end
 
   local result = best_match_link or default_link
-  log(
+  NixvimManagerUtils.log(
     "DEBUG",
     "resolve_link: result="
       .. tostring(result)
@@ -1029,12 +568,23 @@ end
 ---@return string
 function NixvimManager:get_dir()
   local dir = self._opts.dir
-  log("DEBUG", "get_dir: " .. dir)
+  NixvimManagerUtils.log("DEBUG", "get_dir: " .. dir)
   return dir
 end
 
+function NixvimManager:get_nixvims()
+  local copy = vim.deepcopy(self.nixvims)
+  copy.__jsontype = nil
+  return copy
+end
+
+---@return boolean
+function NixvimManager:is_loaded()
+  return self._loaded
+end
+
 function NixvimManager:_notify(msg, level)
-  log("DEBUG", "_notify: msg=" .. msg)
+  NixvimManagerUtils.log("DEBUG", "_notify: msg=" .. msg)
   vim.schedule(function()
     vim.notify(msg, level or vim.log.levels.INFO)
   end)

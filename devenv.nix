@@ -29,7 +29,6 @@ in {
     NVIM_SNACKS_LUA_TYPES = "${plugin-snacks}/lua";
     NVIM_ORGMODE_LUA_TYPES = "${plugin-orgmode}/lua";
     WEZTERM_LUA_TYPES = "${wezterm-types}/share/lua/5.4";
-    LUA_PATH = "./lua/?.lua;./tests/?.lua;./lua/?/init.lua;;";
     GITHUB_TOKEN = null;
   };
 
@@ -45,6 +44,7 @@ in {
       tests.tests
       tests.btest
       tests.ptest
+      tests.ptestf
     ]
     ++ (
       if config.env.nvim == "TRUE"
@@ -60,8 +60,11 @@ in {
   };
 
   enterShell = ''
+    export YALMS_DEV=true
+    export CWD="$PWD"
+    export LUA_PATH="$PWD/lua/?.lua;$PWD/lua/?/init.lua;;$PWD/lua/?/?.lua;''${LUA_PATH:-;;}"
     echo "yalms development environment"
   '';
 
-  enterTest = tests.tests;
+  enterTest = "${tests.tests-text}";
 }

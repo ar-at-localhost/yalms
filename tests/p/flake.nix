@@ -1,5 +1,6 @@
 {
-  description = "Nixvim manager flake";
+  description = "Nixvim manager flake (test)";
+
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
@@ -7,17 +8,14 @@
       url = "github:nix-community/nixvim/nixos-25.11";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    np = {
-      url = "github:ar-at-localhost/np/nixos-25.11";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
+
   outputs = inputs: let
     flakeUtils = inputs.flake-utils;
   in
     flakeUtils.lib.eachDefaultSystem (system: let
       pkgs = import inputs.nixpkgs {inherit system;};
-      inherit (inputs) nixvim np;
+      inherit (inputs) nixvim;
 
       json = builtins.readFile ./config.json;
       config = builtins.fromJSON json;
@@ -30,14 +28,11 @@
             inherit pkgs;
 
             module = {
-              imports = [
-                np.nixvimModules.base
-                np.nixvimModules.xtras.orgmode
-              ];
+              opts.mouse = "";
             };
 
             extraSpecialArgs = {
-              inherit nixvim np;
+              inherit nixvim;
               inherit (pkgs) stdenv;
             };
           };
@@ -70,6 +65,7 @@
         // {inherit default;};
     in {
       formatter = pkgs.alejandra;
+
       packages = builds;
 
       devShells.default = pkgs.mkShell {

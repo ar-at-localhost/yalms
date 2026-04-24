@@ -10,13 +10,41 @@ M.json = {
   end,
 }
 
+function M.mock_snacks()
+  local mock_win = {
+    buf = 1,
+    show = function() end,
+    hide = function() end,
+  }
+  package.preload["snacks"] = function()
+    return {
+      win = function()
+        return mock_win
+      end,
+    }
+  end
+end
+
+function M.unmock_snacks()
+  package.preload["snacks"] = nil
+end
+
 function M.mock_vim()
   _G.vim = {
-    api = {},
+    api = {
+      nvim_create_namespace = function()
+        return 1
+      end,
+      nvim_buf_set_lines = function() end,
+      nvim_buf_set_extmark = function() end,
+    },
     json = M.json,
     fn = {
       getenv = os.getenv,
     },
+    defer_fn = function(fn)
+      fn()
+    end,
   }
 end
 

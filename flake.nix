@@ -1,5 +1,5 @@
 {
-  description = "yamls <Yet another set of lua modules>";
+  description = "yalms <Yet another set of lua modules>";
 
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
@@ -17,9 +17,10 @@
           inherit system;
         };
 
-        yamls = import ./nix/yalms.nix {inherit pkgs;};
+        yalms = import ./nix/yalms.nix {inherit pkgs;};
       in {
-        packages.default = yamls;
+        formatter = pkgs.alejandra;
+        packages.default = yalms;
       }
     );
 }

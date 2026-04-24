@@ -38,17 +38,25 @@
       "''${@:-tests/b}"
   '';
 
+  ptestf = pkgs.writeShellScriptBin "ptestf" ''
+    ${nvim} \
+      -c "PlenaryBustedFile ''$@" \
+      -c "qa!"
+  '';
+
   ptest = pkgs.writeShellScriptBin "ptest" ''
     ${nvim} \
       -c "PlenaryBustedDirectory ./tests/p { timeout = 5 * 60 * 1000 }" \
       -c "qa!"
   '';
-in {
-  inherit btest ptest;
-  tests = pkgs.writeShellScriptBin "tests" ''
+
+  tests-text = ''
     set -e
 
     bash ${btest}/bin/btest "$@"
     bash ${ptest}/bin/ptest
   '';
+in {
+  inherit btest ptest ptestf tests-text;
+  tests = pkgs.writeShellScriptBin "tests" tests-text;
 }
