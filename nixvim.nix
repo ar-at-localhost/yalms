@@ -1,6 +1,6 @@
-# `orgonomics` Nixvim module
+# `yalms` Nixvim module
 {lib, ...}:
 lib.nixvim.plugins.mkNeovimPlugin {
-  name = "ldx";
+  name = "yalms";
   maintainers = [];
 }
