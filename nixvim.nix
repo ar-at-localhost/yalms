@@ -3,4 +3,5 @@
 lib.nixvim.plugins.mkNeovimPlugin {
   name = "yalms";
   maintainers = [];
+  callSetup = false;
 }
